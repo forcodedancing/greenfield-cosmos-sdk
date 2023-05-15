@@ -189,6 +189,8 @@ func WrapTxToTypedData(
 		Message:     txData,
 	}
 
+	fmt.Printf("typedData %v \n", typedData)
+
 	return typedData, nil
 }
 
