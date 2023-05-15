@@ -2,13 +2,14 @@ package tx
 
 import (
 	errorsmod "cosmossdk.io/errors"
-	"encoding/json"
 	"fmt"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	types "github.com/cosmos/cosmos-sdk/types/tx"
 	signingtypes "github.com/cosmos/cosmos-sdk/types/tx/signing"
 	"github.com/cosmos/cosmos-sdk/x/auth/signing"
+	"github.com/cosmos/gogoproto/jsonpb"
+	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"math/big"
 )
@@ -30,6 +31,12 @@ func (signModeEip712MultiHandler) Modes() []signingtypes.SignMode {
 
 // GetSignBytes implements SignModeHandler.GetSignBytes
 func (signModeEip712MultiHandler) GetSignBytes(mode signingtypes.SignMode, signerData signing.SignerData, tx sdk.Tx) ([]byte, error) {
+
+	if len(tx.GetMsgs()) == 1 {
+		handler := signModeEip712Handler{}
+		return handler.GetSignBytes(mode, signerData, tx)
+	}
+
 	if mode != signingtypes.SignMode_SIGN_MODE_EIP_712 {
 		return nil, fmt.Errorf("expected %s, got %s", signingtypes.SignMode_SIGN_MODE_EIP_712, mode)
 	}
@@ -61,70 +68,36 @@ func (signModeEip712MultiHandler) GetSignBytes(mode signingtypes.SignMode, signe
 	return sigHash, nil
 }
 
-func GetMultiMsgTypes(signerData signing.SignerData, tx sdk.Tx, typedChainID *big.Int) ([]apitypes.Types, *types.SignDocEip712Multi, error) {
+func GetMultiMsgTypes(signerData signing.SignerData, tx sdk.Tx, typedChainID *big.Int) (apitypes.Types, *types.SignDocEip712Multi, error) {
 	protoTx, ok := tx.(*wrapper)
 	if !ok {
 		return nil, nil, fmt.Errorf("can only handle a protobuf Tx, got %T", tx)
 	}
 
-	var msgTypes = make([]apitypes.Types, 0)
-	var signDocs = new(types.SignDocEip712Multi)
-
 	// construct the signDoc
+	msgAnys := make([]*codectypes.Any, 0)
 	for _, msg := range protoTx.GetMsgs() {
 		msgAny, _ := codectypes.NewAnyWithValue(msg)
-		signDoc := &types.SignDocEip712{
-			AccountNumber: signerData.AccountNumber,
-			Sequence:      signerData.Sequence,
-			ChainId:       typedChainID.Uint64(),
-			TimeoutHeight: protoTx.GetTimeoutHeight(),
-			Fee: types.Fee{
-				Amount:   protoTx.GetFee(),
-				GasLimit: protoTx.GetGas(),
-				Payer:    protoTx.FeePayer().String(),
-				Granter:  protoTx.FeeGranter().String(),
-			},
-			Memo: protoTx.GetMemo(),
-			Tip:  protoTx.GetTip(),
-			Msg:  msgAny,
-		}
-
-		// extract the msg types
-		tmpMsgTypes, err := extractMsgTypes(msg)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// patch the msg types to include `Tip` if it's not empty
-		if signDoc.Tip != nil {
-			tmpMsgTypes["Tx"] = []apitypes.Type{
-				{Name: "account_number", Type: "uint256"},
-				{Name: "chain_id", Type: "uint256"},
-				{Name: "fee", Type: "Fee"},
-				{Name: "memo", Type: "string"},
-				{Name: "msg", Type: "Msg"},
-				{Name: "sequence", Type: "uint256"},
-				{Name: "timeout_height", Type: "uint256"},
-				{Name: "tip", Type: "Tip"},
-			}
-			tmpMsgTypes["Tip"] = []apitypes.Type{
-				{Name: "amount", Type: "Coin[]"},
-				{Name: "tipper", Type: "string"},
-			}
-		}
-		msgTypes = append(msgTypes, tmpMsgTypes)
-		signDocs.Docs = append(signDocs.Docs, signDoc)
+		msgAnys = append(msgAnys, msgAny)
 	}
 
-	return msgTypes, signDocs, nil
-}
+	signDoc := &types.SignDocEip712Multi{
+		AccountNumber: signerData.AccountNumber,
+		Sequence:      signerData.Sequence,
+		ChainId:       typedChainID.Uint64(),
+		TimeoutHeight: protoTx.GetTimeoutHeight(),
+		Fee: types.Fee{
+			Amount:   protoTx.GetFee(),
+			GasLimit: protoTx.GetGas(),
+			Payer:    protoTx.FeePayer().String(),
+			Granter:  protoTx.FeeGranter().String(),
+		},
+		Memo: protoTx.GetMemo(),
+		Tip:  protoTx.GetTip(),
+		Msg:  msgAnys,
+	}
 
-func WrapMultiTxToTypedData(
-	chainID uint64,
-	signDoc *types.SignDocEip712Multi,
-	msgTypes []apitypes.Types,
-) (apitypes.TypedData, error) {
-	ttypes := apitypes.Types{
+	msgTypes := apitypes.Types{
 		"EIP712Domain": {
 			{
 				Name: "name",
@@ -149,33 +122,49 @@ func WrapMultiTxToTypedData(
 		},
 		"Tx": {},
 	}
-	messages := apitypes.TypedDataMessage{}
-	var d apitypes.TypedDataDomain
-	for i, msgType := range msgTypes {
-		typedData, err := WrapTxToTypedData(chainID, signDoc.Docs[i], msgType)
-		if err != nil {
-			return apitypes.TypedData{}, err
-		}
 
-		bz, err := json.Marshal(typedData.Message)
+	for i, _ := range protoTx.GetMsgs() {
+		msgTypes["Tx"] = append(msgTypes["Tx"], apitypes.Type{
+			Name: fmt.Sprintf("msg-%d", i+1),
+			Type: "string",
+		})
+	}
+
+	return msgTypes, signDoc, nil
+}
+
+func WrapMultiTxToTypedData(
+	chainID uint64,
+	signDoc *types.SignDocEip712Multi,
+	msgTypes apitypes.Types,
+) (apitypes.TypedData, error) {
+
+	messages := apitypes.TypedDataMessage{}
+	for i, msg := range signDoc.GetMsg() {
+		msgCodec := jsonpb.Marshaler{
+			EmitDefaults: true,
+			OrigName:     true,
+		}
+		bz, err := msgCodec.MarshalToString(msg)
+		if err != nil {
+			return apitypes.TypedData{}, errorsmod.Wrap(err, "failed to JSON marshal data")
+		}
 		if err != nil {
 			panic(err)
 		}
-
-		tt := apitypes.Type{}
-		tt.Name = fmt.Sprintf("content%d", i+1)
-		tt.Type = "string"
-		ttypes["Tx"] = []apitypes.Type{tt}
-		messages[fmt.Sprintf("content%d", i+1)] = string(bz)
-		d = typedData.Domain
+		messages[fmt.Sprintf("msg-%d", i+1)] = bz
 	}
 
-	result := apitypes.TypedData{
-		Types:       ttypes,
+	tempDomain := *domain
+	tempDomain.ChainId = math.NewHexOrDecimal256(int64(chainID))
+	typedData := apitypes.TypedData{
+		Types:       msgTypes,
 		PrimaryType: "Tx",
-		Domain:      d,
+		Domain:      tempDomain,
 		Message:     messages,
 	}
-	fmt.Printf("typedData %v \n", result)
-	return result, nil
+
+	fmt.Printf("typedData %v \n", typedData)
+
+	return typedData, nil
 }

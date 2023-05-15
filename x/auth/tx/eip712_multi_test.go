@@ -26,7 +26,8 @@ func TestEIP712MultiHandler(t *testing.T) {
 
 	chainID := "greenfield_9000"
 	testMemo := "some test memo"
-	testMsg := banktypes.NewMsgSend(addr, addr, sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdkmath.NewInt(1))))
+	testMsg1 := banktypes.NewMsgSend(addr, addr, sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdkmath.NewInt(1))))
+	testMsg2 := banktypes.NewMsgSend(addr, addr, sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdkmath.NewInt(22222))))
 	accNum, accSeq := uint64(1), uint64(2)
 
 	sigData := &signingtypes.SingleSignatureData{
@@ -47,7 +48,7 @@ func TestEIP712MultiHandler(t *testing.T) {
 	fee := txtypes.Fee{Amount: sdk.NewCoins(sdk.NewInt64Coin("atom", 150)), GasLimit: 20000}
 	tip := &txtypes.Tip{Amount: sdk.NewCoins(sdk.NewInt64Coin("tip-token", 10))}
 
-	err := txBuilder.SetMsgs(testMsg)
+	err := txBuilder.SetMsgs(testMsg1, testMsg2)
 	require.NoError(t, err)
 	txBuilder.SetMemo(testMemo)
 	txBuilder.SetFeeAmount(fee.Amount)
