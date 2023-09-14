@@ -63,6 +63,8 @@ const (
 	FlagEnableUnsafeQuery = "enable-unsafe-query"
 	FlagEnablePlainStore  = "enable-plain-store"
 
+	FlagWriteCommitInterval = "write-commit-interval"
+
 	// state sync-related flags
 	FlagStateSyncSnapshotInterval   = "state-sync.snapshot-interval"
 	FlagStateSyncSnapshotKeepRecent = "state-sync.snapshot-keep-recent"

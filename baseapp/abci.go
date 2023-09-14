@@ -225,6 +225,8 @@ func (app *BaseApp) BeginBlock(req abci.RequestBeginBlock) (res abci.ResponseBeg
 		res = app.beginBlocker(app.deliverState.ctx, req)
 		res.Events = sdk.MarkEventsToIndex(res.Events, app.indexEvents)
 		res.ExtraData = sdk.Uint64ToBigEndian(app.deliverState.ctx.GasMeter().RwConsumed())
+
+		fmt.Println("begin block rw:", app.deliverState.ctx.GasMeter().RwConsumed())
 	}
 	// set the signed validators for addition to context in deliverTx
 	app.voteInfos = req.LastCommitInfo.GetVotes()
@@ -249,6 +251,7 @@ func (app *BaseApp) EndBlock(req abci.RequestEndBlock) (res abci.ResponseEndBloc
 		res = app.endBlocker(app.deliverState.ctx, req)
 		res.Events = sdk.MarkEventsToIndex(res.Events, app.indexEvents)
 		res.ExtraData = sdk.Uint64ToBigEndian(app.deliverState.ctx.GasMeter().RwConsumed())
+		fmt.Println("end block rw:", app.deliverState.ctx.GasMeter().RwConsumed())
 	}
 
 	if cp := app.GetConsensusParams(app.deliverState.ctx); cp != nil {
@@ -479,11 +482,12 @@ func (app *BaseApp) Commit() abci.ResponseCommit {
 	app.deliverState.ms.Write()
 	var commitID storetypes.CommitID
 	if ok {
-		// TODO: read from config file
-		if header.Height%10 == 0 { // graceful shutdown is not easy to achieve, for un-flushed state is store in cometbft
+		if app.writeCommitInterval <= 1 || header.Height%int64(app.writeCommitInterval) == 0 { // graceful shutdown is not easy to achieve, for un-flushed state is store in cometbft
 			commitID = app.cms.Commit()
+			app.logger.Info("commit flushed", "commit", fmt.Sprintf("%X", commitID))
 		} else {
 			commitID = rms.CommitWithoutFlush()
+			app.logger.Info("commit without flush", "commit", fmt.Sprintf("%X", commitID))
 		}
 	} else {
 		commitID = app.cms.Commit()
@@ -505,7 +509,7 @@ func (app *BaseApp) Commit() abci.ResponseCommit {
 		}
 	}
 
-	app.logger.Info("commit synced", "commit", fmt.Sprintf("%X", commitID))
+	//app.logger.Info("commit synced", "commit", fmt.Sprintf("%X", commitID))
 
 	// Reset the Check state to the latest committed.
 	app.checkStateMtx.Lock()

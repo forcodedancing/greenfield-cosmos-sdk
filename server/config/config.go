@@ -104,6 +104,9 @@ type BaseConfig struct {
 
 	// EnablePlainStore enable/disable plain db store without iavl.
 	EnablePlainStore bool `mapstructure:"enable-plain-store"`
+
+	// WriteCommitInterval defines the interval of flush commit to database.
+	WriteCommitInterval int `mapstructure:"write_commit_interval"`
 }
 
 // APIConfig defines the API listener configuration.
@@ -287,6 +290,7 @@ func DefaultConfig() *Config {
 			AppDBBackend:        "",
 			EnableUnsafeQuery:   false,
 			EnablePlainStore:    false,
+			WriteCommitInterval: 1,
 		},
 		Telemetry: telemetry.Config{
 			Enabled:      false,
@@ -353,6 +357,14 @@ func (c Config) ValidateBasic() error {
 			"cannot enable state sync snapshots with '%s' pruning setting", pruningtypes.PruningOptionEverything,
 		)
 	}
-
+	if c.BaseConfig.WriteCommitInterval < 1 {
+		return sdkerrors.ErrAppConfig.Wrap("set write commit interval to bigger than zero in app.toml")
+	}
+	if c.EnablePlainStore && c.BaseConfig.WriteCommitInterval > 1 {
+		return sdkerrors.ErrAppConfig.Wrap("cannot enable plain store type when interval commit is enabled")
+	}
+	if !c.IAVLDisableFastNode && c.BaseConfig.WriteCommitInterval > 1 {
+		return sdkerrors.ErrAppConfig.Wrap("cannot enable IAVL fast node when interval commit is enabled")
+	}
 	return nil
 }

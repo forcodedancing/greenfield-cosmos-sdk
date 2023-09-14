@@ -170,6 +170,9 @@ type BaseApp struct { //nolint: maligned
 
 	// enablePlainStore defines whether uses plain db store type or not
 	enablePlainStore bool
+
+	// writeCommitInterval defines the interval to write commit to the underlying database
+	writeCommitInterval int
 }
 
 // NewBaseApp returns a reference to an initialized BaseApp. It accepts a

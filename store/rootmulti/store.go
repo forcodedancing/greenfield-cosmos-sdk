@@ -425,6 +425,10 @@ func (rs *Store) LastCommitID() types.CommitID {
 
 // Commit implements Committer/CommitStore.
 func (rs *Store) Commit() types.CommitID {
+	return rs.commit(true)
+}
+
+func (rs *Store) commit(flush bool) types.CommitID {
 	var previousHeight, version int64
 	if rs.lastCommitInfo.GetVersion() == 0 && rs.initialVersion > 1 {
 		// This case means that no commit has been made in the store, we
@@ -444,9 +448,11 @@ func (rs *Store) Commit() types.CommitID {
 		rs.logger.Debug("commit header and version mismatch", "header_height", rs.commitHeader.Height, "version", version)
 	}
 
-	rs.lastCommitInfo = commitStores(version, rs.stores, rs.removalMap)
+	rs.lastCommitInfo = commitStores(version, rs.stores, rs.removalMap, flush)
 	rs.lastCommitInfo.Timestamp = rs.commitHeader.Time
-	defer rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
+	if flush {
+		defer rs.flushMetadata(rs.db, version, rs.lastCommitInfo)
+	}
 
 	// remove remnants of removed stores
 	for sk := range rs.removalMap {
@@ -472,48 +478,7 @@ func (rs *Store) Commit() types.CommitID {
 
 // CommitWithoutFlush will commit without flush to database.
 func (rs *Store) CommitWithoutFlush() types.CommitID {
-	var previousHeight, version int64
-	if rs.lastCommitInfo.GetVersion() == 0 && rs.initialVersion > 1 {
-		// This case means that no commit has been made in the store, we
-		// start from initialVersion.
-		version = rs.initialVersion
-	} else {
-		// This case can means two things:
-		// - either there was already a previous commit in the store, in which
-		// case we increment the version from there,
-		// - or there was no previous commit, and initial version was not set,
-		// in which case we start at version 1.
-		previousHeight = rs.lastCommitInfo.GetVersion()
-		version = previousHeight + 1
-	}
-
-	if rs.commitHeader.Height != version {
-		rs.logger.Debug("commit header and version mismatch", "header_height", rs.commitHeader.Height, "version", version)
-	}
-
-	rs.lastCommitInfo = commitStoresWithoutFlush(version, rs.stores, rs.removalMap)
-	rs.lastCommitInfo.Timestamp = rs.commitHeader.Time
-
-	// remove remnants of removed stores
-	for sk := range rs.removalMap {
-		if _, ok := rs.stores[sk]; ok {
-			delete(rs.stores, sk)
-			delete(rs.storesParams, sk)
-			delete(rs.keysByName, sk.Name())
-		}
-	}
-
-	// reset the removalMap
-	rs.removalMap = make(map[types.StoreKey]bool)
-
-	if err := rs.handlePruning(version); err != nil {
-		panic(err)
-	}
-
-	return types.CommitID{
-		Version: version,
-		Hash:    rs.lastCommitInfo.Hash(),
-	}
+	return rs.commit(false)
 }
 
 // CacheWrap implements CacheWrapper/Store/CommitStore.
@@ -1234,7 +1199,8 @@ func GetLatestVersion(db dbm.DB) int64 {
 }
 
 // Commits each store and returns a new commitInfo.
-func commitStores(version int64, storeMap map[types.StoreKey]types.CommitKVStore, removalMap map[types.StoreKey]bool) *types.CommitInfo {
+func commitStores(version int64, storeMap map[types.StoreKey]types.CommitKVStore, removalMap map[types.StoreKey]bool,
+	flush bool) *types.CommitInfo {
 	storeInfos := make([]types.StoreInfo, 0, len(storeMap))
 
 	storeKeys := keysForStoreKeyMap(storeMap)
@@ -1251,66 +1217,24 @@ func commitStores(version int64, storeMap map[types.StoreKey]types.CommitKVStore
 			last.Version = version
 			commitID = last
 		} else {
-			commitID = store.Commit()
-		}
-
-		storeType := store.GetStoreType()
-		if storeType == types.StoreTypeTransient || storeType == types.StoreTypeMemory {
-			continue
-		}
-
-		if !removalMap[key] {
-			si := types.StoreInfo{}
-			si.Name = key.Name()
-			si.CommitId = commitID
-			storeInfos = append(storeInfos, si)
-		}
-	}
-
-	sort.SliceStable(storeInfos, func(i, j int) bool {
-		return strings.Compare(storeInfos[i].Name, storeInfos[j].Name) < 0
-	})
-
-	return &types.CommitInfo{
-		Version:    version,
-		StoreInfos: storeInfos,
-	}
-}
-
-// Commits each store and returns a new commitInfo.
-func commitStoresWithoutFlush(version int64, storeMap map[types.StoreKey]types.CommitKVStore, removalMap map[types.StoreKey]bool) *types.CommitInfo {
-	storeInfos := make([]types.StoreInfo, 0, len(storeMap))
-
-	storeKeys := keysForStoreKeyMap(storeMap)
-
-	for _, key := range storeKeys {
-		store := storeMap[key]
-		storeType := store.GetStoreType()
-
-		last := store.LastCommitID()
-
-		// If a commit event execution is interrupted, a new iavl store's version
-		// will be larger than the RMS's metadata, when the block is replayed, we
-		// should avoid committing that iavl store again.
-		var commitID types.CommitID
-		if last.Version >= version {
-			last.Version = version
-			commitID = last
-		} else {
-			cacheStore, ok := store.(*cache.CommitKVStoreCache)
-			if ok {
-				iavlStore, ok := cacheStore.CommitKVStore.(*iavl.Store)
-				if ok {
-					iavlStore.CommitWithoutFlush()
-				} else {
-					panic("not iavl store")
-				}
-
-			} else {
+			if flush {
 				commitID = store.Commit()
+			} else {
+				cacheStore, ok := store.(*cache.CommitKVStoreCache)
+				if ok {
+					iavlStore, ok := cacheStore.CommitKVStore.(*iavl.Store)
+					if ok {
+						commitID = iavlStore.CommitWithoutFlush()
+					} else {
+						panic("not iavl store")
+					}
+				} else {
+					commitID = store.Commit()
+				}
 			}
 		}
 
+		storeType := store.GetStoreType()
 		if storeType == types.StoreTypeTransient || storeType == types.StoreTypeMemory {
 			continue
 		}

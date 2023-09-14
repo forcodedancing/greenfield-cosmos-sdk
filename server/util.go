@@ -500,6 +500,7 @@ func DefaultBaseappOptions(appOpts types.AppOptions) []func(*baseapp.BaseApp) {
 		baseapp.SetChainID(chainID),
 		baseapp.SetEnableUnsafeQuery(cast.ToBool(appOpts.Get(FlagEnableUnsafeQuery))),
 		baseapp.SetEnablePlainStore(cast.ToBool(appOpts.Get(FlagEnablePlainStore))),
+		baseapp.SetWriteCommitInterval(cast.ToInt(appOpts.Get(FlagWriteCommitInterval))),
 	}
 }
 

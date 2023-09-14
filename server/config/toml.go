@@ -101,6 +101,11 @@ enable-unsafe-query = "{{ .BaseConfig.EnableUnsafeQuery }}"
 # Default is false.
 enable-plain-store = "{{ .BaseConfig.EnablePlainStore }}"
 
+# WriteCommitInterval defines the interval of flush commit to database.
+# If you change it, please also set the same value for write_state_interval config in config.toml file.
+# Default is 1.
+write_commit_interval = "{{ .BaseConfig.WriteCommitInterval }}"
+
 ###############################################################################
 ###                           Upgrade Configuration                         ###
 ###############################################################################

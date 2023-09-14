@@ -112,6 +112,11 @@ func SetEnablePlainStore(enabled bool) func(*BaseApp) {
 	return func(app *BaseApp) { app.enablePlainStore = enabled }
 }
 
+// SetWriteCommitInterval sets the flag to define write commit interval in BaseApp.
+func SetWriteCommitInterval(interval int) func(*BaseApp) {
+	return func(app *BaseApp) { app.writeCommitInterval = interval }
+}
+
 func (app *BaseApp) SetName(name string) {
 	if app.sealed {
 		panic("SetName() on sealed BaseApp")
